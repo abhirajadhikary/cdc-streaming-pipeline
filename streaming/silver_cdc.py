@@ -124,14 +124,14 @@ def upsert_to_silver(micro_batch_df, batch_id, silver_path):
         .execute()
     )
 
-def run_silver():
+def run_silver(spark=None):
     bucket = os.getenv("MINIO_BUCKET", "cdc-lake")
     bronze_path = f"s3a://{bucket}/bronze/customer_transactions"
     silver_path = f"s3a://{bucket}/silver/customer_transactions"
     checkpoint_path = f"s3a://{bucket}/checkpoints/silver"
 
-    spark = create_spark_session("CDC-Silver-Writer")
-    spark.sparkContext.setLogLevel("WARN")
+    if spark is None:
+        spark = create_spark_session("CDC-Silver-Writer")
 
     print(f"Reading stream from Bronze Delta Lake: {bronze_path}")
 
@@ -149,7 +149,11 @@ def run_silver():
         .start()
     )
 
-    query.awaitTermination()
+    return query
+
 
 if __name__ == "__main__":
-    run_silver()
+    spark = create_spark_session("CDC-Silver-Writer")
+    spark.sparkContext.setLogLevel("WARN")
+    query = run_silver(spark)
+    query.awaitTermination()

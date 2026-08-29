@@ -1,9 +1,9 @@
 import os
-from pyspark.sql.functions import col, from_json, current_timestamp, struct, to_json
-from pyspark.sql.types import StringType, StructType, StructField, LongType, IntegerType
+from pyspark.sql.functions import col, current_timestamp
 from streaming.spark_session import create_spark_session
 
-def run_bronze():
+
+def run_bronze(spark=None):
     kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     kafka_topic = os.getenv("KAFKA_CDC_TOPIC", "neon_cdc.public.customer_transactions")
     bucket = os.getenv("MINIO_BUCKET", "cdc-lake")
@@ -11,8 +11,8 @@ def run_bronze():
     bronze_path = f"s3a://{bucket}/bronze/customer_transactions"
     checkpoint_path = f"s3a://{bucket}/checkpoints/bronze"
 
-    spark = create_spark_session("CDC-Bronze-Writer")
-    spark.sparkContext.setLogLevel("WARN")
+    if spark is None:
+        spark = create_spark_session("CDC-Bronze-Writer")
 
     print(f"Reading stream from Kafka topic: {kafka_topic}")
 
@@ -24,7 +24,6 @@ def run_bronze():
         .load()
     )
 
-    # Parse raw payload and preserve Kafka metadata
     bronze_df = (
         kafka_stream.select(
             col("key").cast("string").alias("kafka_key"),
@@ -47,7 +46,11 @@ def run_bronze():
         .start(bronze_path)
     )
 
-    query.awaitTermination()
+    return query
+
 
 if __name__ == "__main__":
-    run_bronze()
+    spark = create_spark_session("CDC-Bronze-Writer")
+    spark.sparkContext.setLogLevel("WARN")
+    query = run_bronze(spark)
+    query.awaitTermination()
