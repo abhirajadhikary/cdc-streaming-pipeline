@@ -1,24 +1,24 @@
 import os
 from delta.tables import DeltaTable
-from pyspark.sql.functions import col, from_json, expr, row_number
+from pyspark.sql.functions import col, from_json, expr, row_number, unbase64, hex, conv
 from pyspark.sql.window import Window
 from pyspark.sql.types import (
-    StructType, StructField, StringType, IntegerType, DecimalType, TimestampType
+    StructType, StructField, StringType, IntegerType, LongType
 )
 from streaming.spark_session import create_spark_session
 
-# Define payload schema matching the 10-column customer_transactions table
+# Define payload schema matching Debezium serialization format for customer_transactions table
 transaction_schema = StructType([
-    StructField("transaction_id", IntegerType(), True),
+    StructField("transaction_id", LongType(), True),       # LongType for PostgreSQL BIGSERIAL
     StructField("customer_id", IntegerType(), True),
     StructField("customer_name", StringType(), True),
     StructField("product_id", IntegerType(), True),
     StructField("product_name", StringType(), True),
     StructField("quantity", IntegerType(), True),
-    StructField("unit_price", DecimalType(10, 2), True),
-    StructField("total_amount", DecimalType(12, 2), True),
+    StructField("unit_price", StringType(), True),         # Base64 string from Debezium
+    StructField("total_amount", StringType(), True),       # Base64 string from Debezium
     StructField("status", StringType(), True),
-    StructField("updated_at", StringType(), True)
+    StructField("updated_at", LongType(), True)            # Epoch microseconds from Debezium
 ])
 
 # Define Debezium CDC envelope schema
@@ -27,6 +27,15 @@ cdc_envelope_schema = StructType([
     StructField("after", transaction_schema, True),
     StructField("op", StringType(), True)
 ])
+
+
+def decode_debezium_decimal(col_ref, scale=100.0):
+    """Decodes base64-encoded binary string from Debezium into standard numeric Decimal/Double value."""
+    return (
+        expr(f"CASE WHEN {col_ref} IS NOT NULL THEN conv(hex(unbase64({col_ref})), 16, 10) / {scale} ELSE NULL END")
+        .cast("decimal(12, 2)")
+    )
+
 
 def upsert_to_silver(micro_batch_df, batch_id, silver_path):
     if micro_batch_df.isEmpty():
@@ -47,7 +56,7 @@ def upsert_to_silver(micro_batch_df, batch_id, silver_path):
         )
     )
 
-    # Extract primary key and operational payload
+    # Extract primary key and operational payload with Base64 decoding
     processed_df = parsed_df.select(
         col("op"),
         col("kafka_offset"),
@@ -57,10 +66,10 @@ def upsert_to_silver(micro_batch_df, batch_id, silver_path):
         expr("CASE WHEN op = 'd' THEN before.product_id ELSE after.product_id END").alias("product_id"),
         expr("CASE WHEN op = 'd' THEN before.product_name ELSE after.product_name END").alias("product_name"),
         expr("CASE WHEN op = 'd' THEN before.quantity ELSE after.quantity END").alias("quantity"),
-        expr("CASE WHEN op = 'd' THEN before.unit_price ELSE after.unit_price END").alias("unit_price"),
-        expr("CASE WHEN op = 'd' THEN before.total_amount ELSE after.total_amount END").alias("total_amount"),
+        decode_debezium_decimal("CASE WHEN op = 'd' THEN before.unit_price ELSE after.unit_price END", scale=100.0).alias("unit_price"),
+        decode_debezium_decimal("CASE WHEN op = 'd' THEN before.total_amount ELSE after.total_amount END", scale=100.0).alias("total_amount"),
         expr("CASE WHEN op = 'd' THEN before.status ELSE after.status END").alias("status"),
-        expr("CASE WHEN op = 'd' THEN before.updated_at ELSE after.updated_at END").alias("updated_at")
+        expr("CASE WHEN op = 'd' THEN (before.updated_at / 1000000)::timestamp ELSE (after.updated_at / 1000000)::timestamp END").alias("updated_at")
     )
 
     # Deduplicate within micro-batch (keep highest offset per primary key)
