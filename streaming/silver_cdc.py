@@ -1,4 +1,5 @@
 import os
+import time
 from delta.tables import DeltaTable
 from pyspark.sql.functions import col, from_json, expr, row_number, unbase64, hex, conv
 from pyspark.sql.window import Window
@@ -141,6 +142,10 @@ def run_silver(spark=None):
 
     if spark is None:
         spark = create_spark_session("CDC-Silver-Writer")
+
+    while not DeltaTable.isDeltaTable(spark, bronze_path):
+        print("Waiting for Bronze Delta table to be initialized...")
+        time.sleep(2)
 
     print(f"Reading stream from Bronze Delta Lake: {bronze_path}")
 

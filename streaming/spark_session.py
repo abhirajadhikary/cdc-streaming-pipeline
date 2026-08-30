@@ -8,7 +8,6 @@ def create_spark_session(app_name: str = "CDC-Pipeline") -> SparkSession:
 
     builder = (
         SparkSession.builder.appName(app_name)
-        .config("spark.jars.packages", "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
         # S3 / MinIO Configuration
